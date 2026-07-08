@@ -401,6 +401,12 @@ class PinBoardView extends ItemView {
     menu.addItem((item) =>
       item.setTitle('Open note').setIcon('pencil').onClick(() => this.openNote(file))
     );
+    menu.addItem((item) =>
+      item
+        .setTitle('Move to another board…')
+        .setIcon('folder-input')
+        .onClick(() => this.movePin(file))
+    );
     menu.addSeparator();
     menu.addItem((item) =>
       item.setTitle('Delete pin').setIcon('trash').onClick(() => this.deletePin(file))
@@ -415,15 +421,83 @@ class PinBoardView extends ItemView {
       `Delete "${file.name}"? It will be moved to trash (recoverable), ` +
       'along with its caption note if it has one.';
     new ConfirmModal(this.app, 'Delete pin', message, 'Delete', async () => {
-      const note = this.app.vault.getAbstractFileByPath(file.path + '.md');
       try {
-        await this.app.fileManager.trashFile(file);
-        if (note) await this.app.fileManager.trashFile(note);
+        await this.trashPinFiles(file);
       } catch (err) {
         console.error('Pin Board: failed to delete', file.name, err);
         new Notice('Pin Board: could not delete that pin.');
       }
     }).open();
+  }
+
+  // Send a pin's picture and its caption note (if any) to trash together.
+  async trashPinFiles(file) {
+    const note = this.app.vault.getAbstractFileByPath(file.path + '.md');
+    await this.app.fileManager.trashFile(file);
+    if (note) await this.app.fileManager.trashFile(note);
+  }
+
+  // Right-click "Move to another board…": copy the pin into a folder the user
+  // picks, then ask whether to also remove it from the current board. Choosing
+  // "Remove" makes it a plain move; "Keep copy" leaves the pin in both boards.
+  movePin(file) {
+    const current = file.parent ? file.parent.path : '/';
+    const folders = this.getAllFolders()
+      .map((f) => f.path)
+      .filter((p) => p !== current);
+
+    new MoveModal(this.app, folders, async (destPath) => {
+      const destDir = destPath === '/' || destPath === '' ? '' : destPath;
+      let newFile;
+      try {
+        newFile = await this.copyPinTo(file, destDir);
+      } catch (err) {
+        console.error('Pin Board: failed to move pin', file.name, err);
+        new Notice('Pin Board: could not move that pin.');
+        return;
+      }
+      const destLabel = destDir === '' ? 'the vault root' : destDir;
+      new ConfirmModal(
+        this.app,
+        'Pin added',
+        `“${file.name}” was added to ${destLabel}. Keep a copy in the old board too?`,
+        'Remove from old board',
+        async () => {
+          try {
+            await this.trashPinFiles(file);
+          } catch (err) {
+            console.error('Pin Board: failed to remove original', file.name, err);
+            new Notice('Pin Board: added the copy, but could not remove the original.');
+          }
+        },
+        'Keep copy'
+      ).open();
+    }).open();
+  }
+
+  // Copy a pin's picture into destDir under a fresh (non-colliding) name, and
+  // copy its caption note too — repointing the note's embed at the new picture.
+  async copyPinTo(file, destDir) {
+    const buf = await this.app.vault.readBinary(file);
+    const newPath = await this.uniquePath(destDir, file.name);
+    const newFile = await this.app.vault.createBinary(newPath, buf);
+    await this.copyCaptionNote(file, newFile);
+    return newFile;
+  }
+
+  async copyCaptionNote(oldFile, newFile) {
+    const oldNote = this.app.vault.getAbstractFileByPath(oldFile.path + '.md');
+    if (!oldNote) return;
+    if (this.app.vault.getAbstractFileByPath(newFile.path + '.md')) return;
+    try {
+      let content = await this.app.vault.read(oldNote);
+      // Repoint the note's picture embed from the original to the copy.
+      content = content.split(oldFile.path).join(newFile.path);
+      content = content.split('[[' + oldFile.name).join('[[' + newFile.name);
+      await this.app.vault.create(newFile.path + '.md', content);
+    } catch (err) {
+      console.error('Pin Board: could not copy caption note for', oldFile.name, err);
+    }
   }
 
   getCaption(file) {
@@ -746,25 +820,67 @@ class PinBoardSettingTab extends PluginSettingTab {
   }
 }
 
-// A small yes/no confirmation dialog used before deleting a pin.
+// A small yes/no confirmation dialog. The cancel button's label can be
+// customised (e.g. "Keep copy") for prompts where "cancel" is a real choice.
 class ConfirmModal extends Modal {
-  constructor(app, title, message, confirmText, onConfirm) {
+  constructor(app, title, message, confirmText, onConfirm, cancelText = 'Cancel') {
     super(app);
     this.titleText = title;
     this.message = message;
     this.confirmText = confirmText;
     this.onConfirm = onConfirm;
+    this.cancelText = cancelText;
   }
 
   onOpen() {
     this.titleEl.setText(this.titleText);
     this.contentEl.createEl('p', { text: this.message });
     const buttons = this.contentEl.createDiv({ cls: 'pin-board-modal-buttons' });
-    buttons.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
+    buttons.createEl('button', { text: this.cancelText }).addEventListener('click', () => this.close());
     const confirmBtn = buttons.createEl('button', { text: this.confirmText, cls: 'mod-warning' });
     confirmBtn.addEventListener('click', () => {
       this.close();
       this.onConfirm();
+    });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+// Folder picker for "Move to another board…". Lists every folder except the
+// pin's current one and calls onMove with the chosen folder path.
+class MoveModal extends Modal {
+  constructor(app, folders, onMove) {
+    super(app);
+    this.folders = folders;
+    this.onMove = onMove;
+  }
+
+  onOpen() {
+    this.titleEl.setText('Move to another board');
+
+    if (this.folders.length === 0) {
+      this.contentEl.createEl('p', { text: 'There are no other folders to move this pin to.' });
+      const row = this.contentEl.createDiv({ cls: 'pin-board-modal-buttons' });
+      row.createEl('button', { text: 'Close', cls: 'mod-cta' }).addEventListener('click', () => this.close());
+      return;
+    }
+
+    this.contentEl.createEl('p', { text: 'Choose the board (folder) to move this pin to:' });
+    const select = this.contentEl.createEl('select', { cls: 'dropdown' });
+    for (const path of this.folders) {
+      select.createEl('option', { value: path, text: path === '/' ? 'Entire vault (root)' : path });
+    }
+
+    const buttons = this.contentEl.createDiv({ cls: 'pin-board-modal-buttons' });
+    buttons.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
+    const moveBtn = buttons.createEl('button', { text: 'Move', cls: 'mod-cta' });
+    moveBtn.addEventListener('click', () => {
+      const dest = select.value;
+      this.close();
+      this.onMove(dest);
     });
   }
 

@@ -49,8 +49,10 @@ That's it — your masonry board is live. Everything below is extra detail.
   straight into the folder you're viewing.
 - Click an image to open it full-size. Use **← / →** (or the on-screen arrows)
   to flip through the whole board; **Esc** or click to close.
-- Right-click any pin for **Open note** or **Delete pin**. Delete moves the file
-  (and its caption note) to trash, so it's recoverable.
+- Right-click any pin for **Open note**, **Move to another board…**, or **Delete
+  pin**. Move copies the pin (and its caption note) into another folder you pick,
+  then asks whether to keep a copy in the old board too or remove it. Delete
+  moves the file (and its caption note) to trash, so it's recoverable.
 - Hover a pin and click **✎ Note** to create/open a note for that pin. The note
   has a `caption:` field — whatever you put there shows under the pin.
 

@@ -1,7 +1,7 @@
 {
   "id": "pin-board",
   "name": "Pin Board",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "minAppVersion": "1.4.0",
   "description": "A Pinterest-style vertical scrolling board for the images and videos in a folder. Point it at a folder, scroll, and optionally attach a note to any pin.",
   "author": "Rayvven",
